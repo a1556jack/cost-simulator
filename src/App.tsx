@@ -89,17 +89,24 @@ const INITIAL_SETTINGS = {
   general: { baseIncrease: 0 }, 
   time: { dayStart: 2.5, dayEnd: 20.5 }, 
   weight: { 
-    hyunjang: 1.0,
-    soaek: 1.28 
+    gyeonginHyunjang: 1.0,               // 경인 현장 가중치
+    gyeonginSoaekJibangHyunjang: 1.0,    // 경인 소액/지방 현장 가중치
+    gyeonginSoaekHyunjang: 1.0,          // 호환용
+    jibangHyunjang: 1.0,                 // 호환용
+    hyunjang: 1.0,                       // 호환용
+    soaek: 1.28                          // 소액 가중치
   },
   TR: { 
     hyunjangRate: 1.30, 
-    soaekRate: 1.46  
+    soaekRate: 1.46,
+    gyeonginHyunjangRate: 1.30,
+    gyeonginSoaekRate: 1.46,
+    jibangRate: 1.30
   },
   TC: { 
     weekdayDay: 1.00, 
-    weekdayNight: 1.50, 
-    weekend: 1.50       
+    weekdayNight: 1.00, 
+    weekend: 1.00       
   }
 };
 
@@ -305,10 +312,22 @@ const calculateCosts = (data, config) => {
     const isGyeonginHyun = center === '경인_현장' || center === '양지_현장';
     const isGyeonginSoaek = center === '경인_소액' || center === '양지_소액';
     
-    // 현장 / 소액 가중치 적용 (설정 가능한 현장 가중치 반영)
-    const hyunWeight = config.weight.hyunjang ?? 1.0;
-    const soaekWeight = config.weight.soaek ?? 1.28;
-    const weight = type === '소액' ? soaekWeight : hyunWeight;
+    // 청구(TR) 가중치: 소액만 소액가중치 적용, 현장은 1.0 고정
+    const trWeight = type === '소액' ? (config.weight.soaek ?? 1.28) : 1.0;
+    
+    // 지급(TC) 가중치:
+    // 1) 소액건: config.weight.soaek
+    // 2) 경인 현장: config.weight.gyeonginHyunjang
+    // 3) 경인 소액/지방 현장: config.weight.gyeonginSoaekJibangHyunjang
+    let tcWeight = 1.0;
+    if (type === '소액') {
+      tcWeight = config.weight.soaek ?? 1.28;
+    } else if (isGyeonginHyun) {
+      tcWeight = config.weight.gyeonginHyunjang ?? 1.0;
+    } else {
+      // 경인_소액 센터의 현장건 또는 지방센터의 현장건
+      tcWeight = config.weight.gyeonginSoaekJibangHyunjang ?? config.weight.gyeonginSoaekHyunjang ?? config.weight.jibangHyunjang ?? config.weight.hyunjang ?? 1.0;
+    }
 
     const trRate = type === '소액' ? (config.TR.soaekRate ?? 1.46) : (config.TR.hyunjangRate ?? 1.30);
     
@@ -323,8 +342,8 @@ const calculateCosts = (data, config) => {
 
     const baseForNew = isSmall ? Math.floor(baseCost / 1.28) : baseCost;
     const adjustedBaseCost = baseForNew * baseCostMultiplier;
-    const TR_new = Math.floor(adjustedBaseCost * weight * trRate);
-    const TC_new = Math.floor(adjustedBaseCost * weight * tcRate);
+    const TR_new = Math.floor(adjustedBaseCost * trWeight * trRate);
+    const TC_new = Math.floor(adjustedBaseCost * tcWeight * tcRate);
 
     globalMetrics.totalTR += TR_new;
     globalMetrics.totalTC += TC_new;
@@ -1126,7 +1145,7 @@ export default function App() {
     csvContent += `기타 지급 버전,${vSettings.general.expenseVersion}년도\n`;
     csvContent += `정상시공비 인상률(%),${vSettings.general.baseIncrease}%\n`;
     csvContent += `주간 시간대 (시),${vSettings.time.dayStart} ~ ${vSettings.time.dayEnd}\n`;
-    csvContent += `가중치,경인_현장: ${vSettings.weight.gyeonginHyunjang ?? 1.0} / 경인_소액(현장): ${vSettings.weight.gyeonginSoaekHyunjang ?? 1.0} / 지방_현장: ${vSettings.weight.jibangHyunjang ?? 1.0} / 소액: ${vSettings.weight.soaek}\n`;
+    csvContent += `가중치,경인 현장: ${vSettings.weight.gyeonginHyunjang ?? 1.0} / 경인 소액/지방 현장: ${vSettings.weight.gyeonginSoaekJibangHyunjang ?? vSettings.weight.gyeonginSoaekHyunjang ?? 1.0} / 소액: ${vSettings.weight.soaek}\n`;
     csvContent += `청구 요율 (TR),현장 청구 요율: ${vSettings.TR.hyunjangRate} / 소액 청구 요율: ${vSettings.TR.soaekRate}\n`;
     csvContent += `지급 요율 (TC),평일 주간: ${vSettings.TC.weekdayDay} / 평일 야간: ${vSettings.TC.weekdayNight} / 주말: ${vSettings.TC.weekend}\n\n`;
 
@@ -1451,20 +1470,60 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex justify-between items-center bg-gray-50 p-2 rounded text-sm">
-                <label className="font-bold text-gray-700">현장 가중치</label>
-                <input 
-                  type="number" 
-                  step="0.01" 
-                  value={settings.weight.hyunjang ?? 1.0} 
-                  onChange={e => updateSetting('weight', 'hyunjang', e.target.value)} 
-                  className="w-16 p-1 border rounded text-right font-bold text-gray-800"
-                />
-              </div>
+              <div className="border-t pt-3 space-y-2">
+                <h3 className="font-bold text-gray-800 text-sm flex justify-between items-center">
+                  지급 가중치 (TC)
+                  <span className="text-[10px] text-gray-500 font-normal">*청구(TR) 현장은 1.0 고정</span>
+                </h3>
+                <div className="flex justify-between items-center bg-gray-50 p-2 rounded text-sm">
+                  <label className="font-bold text-gray-700">경인 현장 가중치</label>
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    value={settings.weight.gyeonginHyunjang ?? 1.0} 
+                    onChange={e => {
+                      const val = parseFloat(e.target.value) || 0;
+                      setSettings(prev => ({
+                        ...prev,
+                        weight: { ...prev.weight, gyeonginHyunjang: val, hyunjang: val }
+                      }));
+                    }} 
+                    className="w-16 p-1 border rounded text-right font-bold text-gray-800"
+                  />
+                </div>
 
-              <div className="flex justify-between items-center bg-gray-50 p-2 rounded text-sm">
-                <label className="font-bold text-gray-700">소액 가중치</label>
-                <input type="number" step="0.01" value={settings.weight.soaek} onChange={e => updateSetting('weight', 'soaek', e.target.value)} className="w-16 p-1 border rounded text-right font-bold text-gray-800"/>
+                <div className="flex justify-between items-center bg-gray-50 p-2 rounded text-sm">
+                  <label className="font-bold text-gray-700">경인 소액/지방 현장 가중치</label>
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    value={settings.weight.gyeonginSoaekJibangHyunjang ?? settings.weight.gyeonginSoaekHyunjang ?? 1.0} 
+                    onChange={e => {
+                      const val = parseFloat(e.target.value) || 0;
+                      setSettings(prev => ({
+                        ...prev,
+                        weight: { 
+                          ...prev.weight, 
+                          gyeonginSoaekJibangHyunjang: val,
+                          gyeonginSoaekHyunjang: val,
+                          jibangHyunjang: val 
+                        }
+                      }));
+                    }} 
+                    className="w-16 p-1 border rounded text-right font-bold text-gray-800"
+                  />
+                </div>
+
+                <div className="flex justify-between items-center bg-gray-50 p-2 rounded text-sm">
+                  <label className="font-bold text-gray-700">소액 가중치</label>
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    value={settings.weight.soaek} 
+                    onChange={e => updateSetting('weight', 'soaek', e.target.value)} 
+                    className="w-16 p-1 border rounded text-right font-bold text-gray-800"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1487,12 +1546,12 @@ export default function App() {
                 <input type="number" value={1.00} disabled className="w-16 p-1 border rounded text-right bg-gray-100 text-gray-400 cursor-not-allowed"/>
               </div>
               <div className="flex justify-between items-center text-sm">
-                <label className="text-gray-600 font-semibold text-red-800">평일 야간</label>
-                <input type="number" step="0.01" value={settings.TC.weekdayNight} onChange={e => updateSetting('TC', 'weekdayNight', e.target.value)} className="w-16 p-1 border rounded text-right"/>
+                <label className="text-gray-600 font-semibold text-red-800">평일 야간 (기본 1.0)</label>
+                <input type="number" step="0.01" value={settings.TC.weekdayNight} onChange={e => updateSetting('TC', 'weekdayNight', e.target.value)} className="w-16 p-1 border rounded text-right font-bold"/>
               </div>
               <div className="flex justify-between items-center text-sm">
-                <label className="text-gray-600 font-semibold text-red-800">주말 (기본 1.5)</label>
-                <input type="number" step="0.01" value={settings.TC.weekend} onChange={e => updateSetting('TC', 'weekend', e.target.value)} className="w-16 p-1 border rounded text-right"/>
+                <label className="text-gray-600 font-semibold text-red-800">주말 (기본 1.0)</label>
+                <input type="number" step="0.01" value={settings.TC.weekend} onChange={e => updateSetting('TC', 'weekend', e.target.value)} className="w-16 p-1 border rounded text-right font-bold"/>
               </div>
             </div>
 

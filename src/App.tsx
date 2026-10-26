@@ -97,11 +97,13 @@ const INITIAL_SETTINGS = {
     soaek: 1.28                          // 소액 가중치
   },
   TR: { 
-    hyunjangRate: 1.30, 
-    soaekRate: 1.46,
-    gyeonginHyunjangRate: 1.30,
-    gyeonginSoaekRate: 1.46,
-    jibangRate: 1.30
+    gyeonginHyunjangRate: 1.30,             // 경인 현장 청구율
+    gyeonginSoaekJibangHyunjangRate: 1.30,   // 경인 소액/지방 현장 청구율
+    gyeonginSoaekHyunjangRate: 1.30,         // 호환용
+    jibangRate: 1.30,                        // 호환용
+    soaekRate: 1.46,                         // 소액 청구율
+    hyunjangRate: 1.30,                      // 하위 호환용
+    gyeonginSoaekRate: 1.46                  // 호환용
   },
   TC: { 
     weekdayDay: 1.00, 
@@ -329,7 +331,15 @@ const calculateCosts = (data, config) => {
       tcWeight = config.weight.gyeonginSoaekJibangHyunjang ?? config.weight.gyeonginSoaekHyunjang ?? config.weight.jibangHyunjang ?? config.weight.hyunjang ?? 1.0;
     }
 
-    const trRate = type === '소액' ? (config.TR.soaekRate ?? 1.46) : (config.TR.hyunjangRate ?? 1.30);
+    let trRate = 1.30;
+    if (type === '소액') {
+      trRate = config.TR.soaekRate ?? 1.46;
+    } else if (isGyeonginHyun) {
+      trRate = config.TR.gyeonginHyunjangRate ?? config.TR.hyunjangRate ?? 1.30;
+    } else {
+      // 경인_소액 센터의 현장건 또는 지방센터의 현장건
+      trRate = config.TR.gyeonginSoaekJibangHyunjangRate ?? config.TR.gyeonginSoaekHyunjangRate ?? config.TR.jibangRate ?? config.TR.hyunjangRate ?? 1.30;
+    }
     
     let tcRate;
     if (isWeekend) {
@@ -871,6 +881,8 @@ export default function App() {
     let LH = { day_H: 0, day_S: 0, night_H: 0, night_S: 0, week_H: 0, week_S: 0, oldTC: 0 };
     let LS = { day_H: 0, day_S: 0, night_H: 0, night_S: 0, week_H: 0, week_S: 0, oldTC: 0 };
 
+    let TR_sum_H_gyeongin = 0;
+    let TR_sum_H_others = 0;
     let TR_sum_H = 0;
     let TR_sum_S = 0;
     let TR_oldTR = 0;
@@ -912,6 +924,11 @@ export default function App() {
             TR_sum_S += baseForNew;
         } else {
             TR_sum_H += baseCost;
+            if (center === '경인_현장' || center === '양지_현장') {
+                TR_sum_H_gyeongin += baseCost;
+            } else {
+                TR_sum_H_others += baseCost;
+            }
         }
     });
 
@@ -932,7 +949,11 @@ export default function App() {
         const lh_tc = getNewTC(LH);
         const ls_tc = getNewTC(LS);
 
-        const tr_val = x * (TR_sum_H * p.trHyun + w * TR_sum_S * p.trSoaek);
+        const tr_val = x * (
+            TR_sum_H_gyeongin * (p.trHyunGyeongin ?? p.trHyun) + 
+            TR_sum_H_others * (p.trHyunOthers ?? p.trHyun) + 
+            w * TR_sum_S * p.trSoaek
+        );
         const tc_total = yh_tc + ysh_tc + yss_tc + lh_tc + ls_tc;
         const billingRatio = totalResultCostSum ? (tr_val / totalResultCostSum) : 0;
 
@@ -1060,7 +1081,13 @@ export default function App() {
         ...prev,
         general: { ...prev.general, baseIncrease: parseFloat(bestParams.baseIncrease.toFixed(2)) },
         weight: { ...prev.weight, soaek: parseFloat(bestParams.wSoaek.toFixed(3)) },
-        TR: { ...prev.TR, hyunjangRate: parseFloat(bestParams.trHyun.toFixed(3)), soaekRate: parseFloat(bestParams.trSoaek.toFixed(3)) },
+        TR: { 
+          ...prev.TR, 
+          hyunjangRate: parseFloat(bestParams.trHyun.toFixed(3)),
+          gyeonginHyunjangRate: parseFloat(bestParams.trHyun.toFixed(3)),
+          gyeonginSoaekJibangHyunjangRate: parseFloat(bestParams.trHyun.toFixed(3)),
+          soaekRate: parseFloat(bestParams.trSoaek.toFixed(3)) 
+        },
         TC: { ...prev.TC, weekdayNight: parseFloat(bestParams.tcNight.toFixed(3)), weekend: parseFloat(bestParams.tcWeek.toFixed(3)) }
       }));
       
@@ -1146,7 +1173,7 @@ export default function App() {
     csvContent += `정상시공비 인상률(%),${vSettings.general.baseIncrease}%\n`;
     csvContent += `주간 시간대 (시),${vSettings.time.dayStart} ~ ${vSettings.time.dayEnd}\n`;
     csvContent += `가중치,경인 현장: ${vSettings.weight.gyeonginHyunjang ?? 1.0} / 경인 소액/지방 현장: ${vSettings.weight.gyeonginSoaekJibangHyunjang ?? vSettings.weight.gyeonginSoaekHyunjang ?? 1.0} / 소액: ${vSettings.weight.soaek}\n`;
-    csvContent += `청구 요율 (TR),현장 청구 요율: ${vSettings.TR.hyunjangRate} / 소액 청구 요율: ${vSettings.TR.soaekRate}\n`;
+    csvContent += `청구 요율 (TR),경인 현장: ${vSettings.TR.gyeonginHyunjangRate ?? vSettings.TR.hyunjangRate ?? 1.30} / 경인 소액·지방 현장: ${vSettings.TR.gyeonginSoaekJibangHyunjangRate ?? vSettings.TR.hyunjangRate ?? 1.30} / 소액: ${vSettings.TR.soaekRate}\n`;
     csvContent += `지급 요율 (TC),평일 주간: ${vSettings.TC.weekdayDay} / 평일 야간: ${vSettings.TC.weekdayNight} / 주말: ${vSettings.TC.weekend}\n\n`;
 
     const getDiffCsv = (diff) => diff > 0 ? `+${diff.toFixed(1)}%` : `${diff.toFixed(1)}%`;
@@ -1528,14 +1555,63 @@ export default function App() {
             </div>
 
             <div className="border-t pt-3 space-y-2">
-              <h3 className="font-bold text-blue-700 text-sm mb-3">청구 요율 (분할)</h3>
-              <div className="flex justify-between items-center text-sm">
-                <label className="text-gray-600 font-semibold text-indigo-800">현장 청구 요율</label>
-                <input type="number" step="0.01" value={settings.TR.hyunjangRate} onChange={e => updateSetting('TR', 'hyunjangRate', e.target.value)} className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800"/>
+              <h3 className="font-bold text-blue-700 text-sm mb-3 flex justify-between items-center">
+                청구 요율 (TR)
+                <span className="text-[10px] text-gray-500 font-normal">*현장 부문 구분 설정</span>
+              </h3>
+              
+              <div className="flex justify-between items-center bg-blue-50/60 p-2 rounded text-sm">
+                <label className="font-bold text-indigo-900">경인 현장 청구율</label>
+                <input 
+                  type="number" 
+                  step="0.01" 
+                  value={settings.TR.gyeonginHyunjangRate ?? settings.TR.hyunjangRate ?? 1.30} 
+                  onChange={e => {
+                    const val = parseFloat(e.target.value) || 0;
+                    setActiveViewSimId('current');
+                    setSettings(prev => ({
+                      ...prev,
+                      TR: { ...prev.TR, gyeonginHyunjangRate: val, hyunjangRate: val }
+                    }));
+                    setAiReport('');
+                  }} 
+                  className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800 bg-white"
+                />
               </div>
-              <div className="flex justify-between items-center text-sm">
-                <label className="text-gray-600 font-semibold text-indigo-800">소액 청구 요율</label>
-                <input type="number" step="0.01" value={settings.TR.soaekRate} onChange={e => updateSetting('TR', 'soaekRate', e.target.value)} className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800"/>
+
+              <div className="flex justify-between items-center bg-blue-50/60 p-2 rounded text-sm">
+                <label className="font-bold text-indigo-900">경인 소액/지방 현장 청구율</label>
+                <input 
+                  type="number" 
+                  step="0.01" 
+                  value={settings.TR.gyeonginSoaekJibangHyunjangRate ?? settings.TR.gyeonginSoaekHyunjangRate ?? settings.TR.jibangRate ?? settings.TR.hyunjangRate ?? 1.30} 
+                  onChange={e => {
+                    const val = parseFloat(e.target.value) || 0;
+                    setActiveViewSimId('current');
+                    setSettings(prev => ({
+                      ...prev,
+                      TR: { 
+                        ...prev.TR, 
+                        gyeonginSoaekJibangHyunjangRate: val,
+                        gyeonginSoaekHyunjangRate: val,
+                        jibangRate: val 
+                      }
+                    }));
+                    setAiReport('');
+                  }} 
+                  className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800 bg-white"
+                />
+              </div>
+
+              <div className="flex justify-between items-center bg-blue-50/60 p-2 rounded text-sm">
+                <label className="font-bold text-indigo-900">소액 청구 요율</label>
+                <input 
+                  type="number" 
+                  step="0.01" 
+                  value={settings.TR.soaekRate} 
+                  onChange={e => updateSetting('TR', 'soaekRate', e.target.value)} 
+                  className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800 bg-white"
+                />
               </div>
             </div>
 

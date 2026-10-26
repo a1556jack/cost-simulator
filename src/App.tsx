@@ -89,22 +89,17 @@ const INITIAL_SETTINGS = {
   general: { baseIncrease: 0 }, 
   time: { dayStart: 2.5, dayEnd: 20.5 }, 
   weight: { 
-    gyeonginHyunjang: 1.0,
-    gyeonginSoaekHyunjang: 1.0,
-    jibangHyunjang: 1.0,
+    hyunjang: 1.0,
     soaek: 1.28 
   },
   TR: { 
-    gyeonginHyunjangRate: 1.30,
-    gyeonginSoaekRate: 1.46,
-    jibangRate: 1.30,
     hyunjangRate: 1.30, 
     soaekRate: 1.46  
   },
   TC: { 
     weekdayDay: 1.00, 
-    weekdayNight: 1.00, 
-    weekend: 1.00       
+    weekdayNight: 1.50, 
+    weekend: 1.50       
   }
 };
 
@@ -310,33 +305,12 @@ const calculateCosts = (data, config) => {
     const isGyeonginHyun = center === '경인_현장' || center === '양지_현장';
     const isGyeonginSoaek = center === '경인_소액' || center === '양지_소액';
     
-    // 청구(TR) 가중치: 소액만 소액가중치 적용, 모든 현장(경인_현장, 경인_소액_현장, 지방_현장)은 1.0 고정 (정상시공비 * 청구율)
-    const trWeight = type === '소액' ? config.weight.soaek : 1.0;
-    
-    // 지급(TC) 가중치:
-    // 1) 소액건: config.weight.soaek
-    // 2) 경인_현장: config.weight.gyeonginHyunjang
-    // 3) 경인_소액(현장): config.weight.gyeonginSoaekHyunjang
-    // 4) 지방_현장: config.weight.jibangHyunjang
-    let tcWeight = 1.0;
-    if (type === '소액') {
-      tcWeight = config.weight.soaek;
-    } else if (isGyeonginHyun) {
-      tcWeight = config.weight.gyeonginHyunjang ?? 1.0;
-    } else if (isGyeonginSoaek) {
-      tcWeight = config.weight.gyeonginSoaekHyunjang ?? 1.0;
-    } else {
-      tcWeight = config.weight.jibangHyunjang ?? 1.0;
-    }
+    // 현장 / 소액 가중치 적용 (설정 가능한 현장 가중치 반영)
+    const hyunWeight = config.weight.hyunjang ?? 1.0;
+    const soaekWeight = config.weight.soaek ?? 1.28;
+    const weight = type === '소액' ? soaekWeight : hyunWeight;
 
-    let trRate = 1.30;
-    if (isGyeonginHyun) {
-      trRate = config.TR.gyeonginHyunjangRate ?? config.TR.hyunjangRate ?? 1.30;
-    } else if (isGyeonginSoaek) {
-      trRate = config.TR.gyeonginSoaekRate ?? config.TR.soaekRate ?? 1.46;
-    } else {
-      trRate = config.TR.jibangRate ?? config.TR.hyunjangRate ?? 1.30;
-    }
+    const trRate = type === '소액' ? (config.TR.soaekRate ?? 1.46) : (config.TR.hyunjangRate ?? 1.30);
     
     let tcRate;
     if (isWeekend) {
@@ -349,8 +323,8 @@ const calculateCosts = (data, config) => {
 
     const baseForNew = isSmall ? Math.floor(baseCost / 1.28) : baseCost;
     const adjustedBaseCost = baseForNew * baseCostMultiplier;
-    const TR_new = Math.floor(adjustedBaseCost * trWeight * trRate);
-    const TC_new = Math.floor(adjustedBaseCost * tcWeight * tcRate);
+    const TR_new = Math.floor(adjustedBaseCost * weight * trRate);
+    const TC_new = Math.floor(adjustedBaseCost * weight * tcRate);
 
     globalMetrics.totalTR += TR_new;
     globalMetrics.totalTC += TC_new;
@@ -528,6 +502,7 @@ export default function App() {
   const [aiReport, setAiReport] = useState('');
   const [aiError, setAiError] = useState('');
   const [recommendedSettings, setRecommendedSettings] = useState(null); 
+  const [geminiApiKey, setGeminiApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
   
   const [mounted, setMounted] = useState(false);
 
@@ -561,8 +536,13 @@ export default function App() {
     
     const currentOtherExpense = currentExpense.total;
     
-    const apiKey = ""; 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+    const apiKey = geminiApiKey.trim();
+    if (!apiKey) {
+      setAiError("오류: AI 추천 기능을 사용하려면 우측 설정에서 'Gemini API Key'를 먼저 입력해주세요.");
+      setIsGeneratingAi(false);
+      return;
+    }
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
     
     const prompt = `
       당신은 물류 시공 비용 최적화 전문 AI입니다.
@@ -1440,75 +1420,63 @@ export default function App() {
             </div>
 
             <div className="space-y-3">
-              {/* 연도별 기타지급 고정 비용 및 재무 지표 안내 */}
-              <div className="bg-indigo-50 p-2.5 rounded border-l-4 border-indigo-500 text-xs space-y-1">
-                <div className="flex justify-between items-center font-bold text-indigo-900">
-                  <span>{selectedYear === 'ALL' ? '전체 기타지급 합계' : `${selectedYear} 기타지급 비용 기준`}</span>
-                  <span className="text-[10px] bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded">고정</span>
-                </div>
-                <p className="text-gray-700 flex justify-between"><span>전체 기타지급:</span> <span className="font-semibold">₩{currentExpense.total.toLocaleString()}</span></p>
-                <p className="text-gray-600 flex justify-between text-[11px]"><span>└ 경인_현장:</span> <span>₩{currentExpense.gyeonginHyun.toLocaleString()}</span></p>
-                <p className="text-gray-600 flex justify-between text-[11px]"><span>└ 경인_소액:</span> <span>₩{currentExpense.gyeonginSoaek.toLocaleString()}</span></p>
-                <p className="text-gray-600 flex justify-between text-[11px]"><span>└ 지방:</span> <span>₩{currentExpense.jibang.toLocaleString()}</span></p>
-                <div className="border-t border-indigo-200/70 pt-1 mt-1 space-y-0.5 text-[11px]">
-                  <div className="flex justify-between items-center font-bold text-indigo-900 mb-0.5">
-                    <span>{selectedYear === 'ALL' ? '전체 재무 지표 (고정비/인건비)' : `${selectedYear}년 고정비/인건비`}</span>
-                  </div>
-                  <p className="text-gray-600 flex justify-between"><span>고정비:</span> <span className="font-semibold text-gray-800">₩{VIEW_FIXED_COST.toLocaleString()}</span></p>
-                  <p className="text-gray-600 flex justify-between"><span>인건비:</span> <span className="font-semibold text-gray-800">₩{VIEW_LABOR_COST.toLocaleString()}</span></p>
-                  {VIEW_NON_OP_PROFIT > 0 && (
-                    <p className="text-gray-600 flex justify-between"><span>영업외손익:</span> <span className="font-semibold text-gray-800">₩{VIEW_NON_OP_PROFIT.toLocaleString()}</span></p>
-                  )}
-                </div>
+              {/* Gemini API key 입력 UI */}
+              <div className="flex flex-col gap-1 bg-purple-50 p-2 rounded border-l-4 border-purple-500 text-xs">
+                <label className="font-bold text-purple-800 flex justify-between items-center">
+                  <span>Gemini API Key</span>
+                  <span className="text-[10px] font-normal text-purple-600">(선택 - AI 추천용)</span>
+                </label>
+                <input 
+                  type="password" 
+                  placeholder="Gemini API Key 입력" 
+                  value={geminiApiKey} 
+                  onChange={e => {
+                    setGeminiApiKey(e.target.value);
+                    localStorage.setItem('gemini_api_key', e.target.value);
+                  }} 
+                  className="w-full p-1 border rounded text-xs focus:outline-none focus:border-purple-500"
+                />
               </div>
-              <div className="flex justify-between items-center bg-gray-50 p-2 rounded text-sm mt-2">
-                <label className="font-bold text-gray-700">정상시공비 인상률(%)</label>
+
+              <div className="flex justify-between items-center bg-indigo-50 p-2 rounded border-l-4 border-indigo-500 text-sm">
+                <label className="font-bold text-indigo-800">정상시공비 인상률(%)</label>
                 <input type="number" step="0.1" value={settings.general.baseIncrease} onChange={e => updateSetting('general', 'baseIncrease', e.target.value)} className="w-16 p-1 border rounded text-right font-bold text-indigo-700"/>
               </div>
+
               <div className="flex justify-between items-center bg-gray-50 p-2 rounded text-sm">
                 <label className="font-bold text-gray-700">주간 시간대 (시)</label>
                 <div className="flex items-center gap-1">
-                  <input type="number" step="0.5" value={settings.time.dayStart} onChange={e => updateSetting('time', 'dayStart', e.target.value)} className="w-16 p-1 border text-center"/> ~ 
-                  <input type="number" step="0.5" value={settings.time.dayEnd} onChange={e => updateSetting('time', 'dayEnd', e.target.value)} className="w-16 p-1 border text-center"/>
+                  <input type="number" step="0.5" value={settings.time.dayStart} onChange={e => updateSetting('time', 'dayStart', e.target.value)} className="w-14 p-1 border text-center text-xs"/> ~ 
+                  <input type="number" step="0.5" value={settings.time.dayEnd} onChange={e => updateSetting('time', 'dayEnd', e.target.value)} className="w-14 p-1 border text-center text-xs"/>
                 </div>
               </div>
-              <div className="border-t pt-3 space-y-2">
-                <h3 className="font-bold text-gray-800 text-sm flex justify-between items-center">
-                  지급 가중치 (TC)
-                  <span className="text-[10px] text-gray-500 font-normal">*청구(TR) 현장은 1.0 고정</span>
-                </h3>
-                <div className="flex justify-between items-center bg-indigo-50 p-2 rounded border-l-4 border-indigo-500 text-sm">
-                  <label className="font-bold text-indigo-800">경인_현장 가중치</label>
-                  <input type="number" step="0.01" value={settings.weight.gyeonginHyunjang ?? 1.0} onChange={e => updateSetting('weight', 'gyeonginHyunjang', e.target.value)} className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800"/>
-                </div>
-                <div className="flex justify-between items-center bg-indigo-50 p-2 rounded border-l-4 border-indigo-500 text-sm">
-                  <label className="font-bold text-indigo-800">경인_소액(현장) 가중치</label>
-                  <input type="number" step="0.01" value={settings.weight.gyeonginSoaekHyunjang ?? 1.0} onChange={e => updateSetting('weight', 'gyeonginSoaekHyunjang', e.target.value)} className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800"/>
-                </div>
-                <div className="flex justify-between items-center bg-indigo-50 p-2 rounded border-l-4 border-indigo-500 text-sm">
-                  <label className="font-bold text-indigo-800">지방_현장 가중치</label>
-                  <input type="number" step="0.01" value={settings.weight.jibangHyunjang ?? 1.0} onChange={e => updateSetting('weight', 'jibangHyunjang', e.target.value)} className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800"/>
-                </div>
-                <div className="flex justify-between items-center bg-gray-50 p-2 rounded text-sm">
-                  <label className="font-bold text-gray-700">소액 가중치 (공통)</label>
-                  <input type="number" step="0.01" value={settings.weight.soaek} onChange={e => updateSetting('weight', 'soaek', e.target.value)} className="w-16 p-1 border rounded text-right font-bold text-gray-700"/>
-                </div>
+
+              <div className="flex justify-between items-center bg-gray-50 p-2 rounded text-sm">
+                <label className="font-bold text-gray-700">현장 가중치</label>
+                <input 
+                  type="number" 
+                  step="0.01" 
+                  value={settings.weight.hyunjang ?? 1.0} 
+                  onChange={e => updateSetting('weight', 'hyunjang', e.target.value)} 
+                  className="w-16 p-1 border rounded text-right font-bold text-gray-800"
+                />
+              </div>
+
+              <div className="flex justify-between items-center bg-gray-50 p-2 rounded text-sm">
+                <label className="font-bold text-gray-700">소액 가중치</label>
+                <input type="number" step="0.01" value={settings.weight.soaek} onChange={e => updateSetting('weight', 'soaek', e.target.value)} className="w-16 p-1 border rounded text-right font-bold text-gray-800"/>
               </div>
             </div>
 
             <div className="border-t pt-3 space-y-2">
-              <h3 className="font-bold text-blue-700 text-sm mb-3">청구 요율 (3분할)</h3>
+              <h3 className="font-bold text-blue-700 text-sm mb-3">청구 요율 (분할)</h3>
               <div className="flex justify-between items-center text-sm">
-                <label className="text-gray-600 font-semibold text-indigo-800">경인_현장 청구 요율</label>
-                <input type="number" step="0.01" value={settings.TR.gyeonginHyunjangRate ?? settings.TR.hyunjangRate ?? 1.30} onChange={e => updateSetting('TR', 'gyeonginHyunjangRate', e.target.value)} className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800"/>
+                <label className="text-gray-600 font-semibold text-indigo-800">현장 청구 요율</label>
+                <input type="number" step="0.01" value={settings.TR.hyunjangRate} onChange={e => updateSetting('TR', 'hyunjangRate', e.target.value)} className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800"/>
               </div>
               <div className="flex justify-between items-center text-sm">
-                <label className="text-gray-600 font-semibold text-indigo-800">경인_소액 청구 요율</label>
-                <input type="number" step="0.01" value={settings.TR.gyeonginSoaekRate ?? settings.TR.soaekRate ?? 1.46} onChange={e => updateSetting('TR', 'gyeonginSoaekRate', e.target.value)} className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800"/>
-              </div>
-              <div className="flex justify-between items-center text-sm">
-                <label className="text-gray-600 font-semibold text-indigo-800">지방 청구 요율</label>
-                <input type="number" step="0.01" value={settings.TR.jibangRate ?? 1.30} onChange={e => updateSetting('TR', 'jibangRate', e.target.value)} className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800"/>
+                <label className="text-gray-600 font-semibold text-indigo-800">소액 청구 요율</label>
+                <input type="number" step="0.01" value={settings.TR.soaekRate} onChange={e => updateSetting('TR', 'soaekRate', e.target.value)} className="w-16 p-1 border rounded border-indigo-500 text-right font-bold text-indigo-800"/>
               </div>
             </div>
 
@@ -1523,7 +1491,7 @@ export default function App() {
                 <input type="number" step="0.01" value={settings.TC.weekdayNight} onChange={e => updateSetting('TC', 'weekdayNight', e.target.value)} className="w-16 p-1 border rounded text-right"/>
               </div>
               <div className="flex justify-between items-center text-sm">
-                <label className="text-gray-600 font-semibold text-red-800">주말 (기본 1.0)</label>
+                <label className="text-gray-600 font-semibold text-red-800">주말 (기본 1.5)</label>
                 <input type="number" step="0.01" value={settings.TC.weekend} onChange={e => updateSetting('TC', 'weekend', e.target.value)} className="w-16 p-1 border rounded text-right"/>
               </div>
             </div>
